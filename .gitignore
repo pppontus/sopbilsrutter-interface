@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+.DS_Store
+implementation-*
+design-comparison-*
+AGENTS.md
+design-qa.md
+.agents/
+.codex/
