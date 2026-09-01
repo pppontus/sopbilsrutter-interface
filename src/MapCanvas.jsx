@@ -223,6 +223,10 @@ export function MapCanvas({
         draw.changeMode("draw_polygon");
         callbacksRef.current.onDrawingChange(true);
       },
+      stopDrawing() {
+        draw.changeMode("simple_select");
+        callbacksRef.current.onDrawingChange(false);
+      },
       clearPolygons() {
         draw.deleteAll();
         draw.changeMode("simple_select");

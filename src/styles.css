@@ -313,6 +313,13 @@ textarea:focus-visible,
   left: 29px;
   z-index: 5;
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.map-toolbar-actions {
+  display: flex;
   gap: 12px;
 }
 
@@ -351,11 +358,69 @@ textarea:focus-visible,
   font-weight: 600;
 }
 
-.map-tool--primary:hover:not(:disabled),
-.map-tool--primary.is-active {
+.map-tool--primary:not(.is-active):hover:not(:disabled) {
   color: #ffffff;
   border-color: var(--blue-hover);
   background: var(--blue-hover);
+}
+
+.map-tool--primary.is-active {
+  color: #ffffff;
+  border-color: #c86d11;
+  background: #d87916;
+  box-shadow: 0 0 0 3px rgba(216, 121, 22, 0.2), 0 3px 10px rgba(22, 32, 44, 0.12);
+}
+
+.map-tool--primary.is-active:hover {
+  border-color: #ad5907;
+  background: #bf650d;
+}
+
+.drawing-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid rgba(196, 204, 214, 0.95);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 2px 7px rgba(22, 32, 44, 0.09);
+  color: #5d6876;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.drawing-status strong {
+  color: #344050;
+  font-weight: 700;
+}
+
+.drawing-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #98a2af;
+}
+
+.drawing-status.is-active {
+  color: #78410e;
+  border-color: rgba(216, 121, 22, 0.45);
+  background: rgba(255, 248, 238, 0.98);
+}
+
+.drawing-status.is-active strong {
+  color: #7a3e08;
+}
+
+.drawing-status.is-active .drawing-status-dot {
+  background: #d87916;
+  box-shadow: 0 0 0 3px rgba(216, 121, 22, 0.16);
+}
+
+.map-workspace.is-drawing .mapboxgl-canvas {
+  cursor: crosshair !important;
 }
 
 .map-tool:disabled {
@@ -678,6 +743,15 @@ textarea:focus-visible,
     top: 76px;
     left: 20px;
     gap: 8px;
+  }
+
+  .map-toolbar-actions {
+    gap: 8px;
+  }
+
+  .drawing-status {
+    max-width: min(360px, calc(100vw - 40px));
+    flex-wrap: wrap;
   }
 
   .action-panel {

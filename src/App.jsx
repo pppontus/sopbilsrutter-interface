@@ -169,8 +169,9 @@ export function App() {
     setMessage(nextReason.message);
   };
 
-  const startDrawing = () => {
-    mapActionsRef.current?.startDrawing();
+  const toggleDrawing = () => {
+    if (isDrawing) mapActionsRef.current?.stopDrawing();
+    else mapActionsRef.current?.startDrawing();
   };
 
   const clearSelection = () => {
@@ -243,7 +244,10 @@ export function App() {
         />
       )}
 
-      <section className="map-workspace" aria-label="Arbetsyta för områdesmarkering">
+      <section
+        className={`map-workspace ${isDrawing ? "is-drawing" : ""}`}
+        aria-label="Arbetsyta för områdesmarkering"
+      >
         <MapCanvas
           accessToken={import.meta.env.VITE_MAPBOX_ACCESS_TOKEN}
           points={pointCollection}
@@ -252,25 +256,37 @@ export function App() {
           registerActions={registerMapActions}
         />
 
-        <div className="map-toolbar" aria-label="Kartverktyg">
-          <button
-            className={`map-tool map-tool--primary ${isDrawing ? "is-active" : ""}`}
-            type="button"
-            aria-pressed={isDrawing}
-            onClick={startDrawing}
-          >
-            <Polygon size={22} weight="regular" aria-hidden="true" />
-            Markera område
-          </button>
-          <button
-            className="map-tool"
-            type="button"
-            disabled={polygons.length === 0}
-            onClick={clearSelection}
-          >
-            <Eraser size={22} weight="regular" aria-hidden="true" />
-            Rensa markering
-          </button>
+        <div className={`map-toolbar ${isDrawing ? "is-drawing" : ""}`}>
+          <div className="map-toolbar-actions" aria-label="Kartverktyg">
+            <button
+              className={`map-tool map-tool--primary ${isDrawing ? "is-active" : ""}`}
+              type="button"
+              aria-pressed={isDrawing}
+              onClick={toggleDrawing}
+            >
+              <Polygon size={22} weight={isDrawing ? "fill" : "regular"} aria-hidden="true" />
+              {isDrawing ? "Avsluta ritläge" : "Markera område"}
+            </button>
+            <button
+              className="map-tool"
+              type="button"
+              disabled={polygons.length === 0}
+              onClick={clearSelection}
+            >
+              <Eraser size={22} weight="regular" aria-hidden="true" />
+              Rensa markering
+            </button>
+          </div>
+
+          <div className={`drawing-status ${isDrawing ? "is-active" : ""}`} role="status" aria-live="polite">
+            <span className="drawing-status-dot" aria-hidden="true" />
+            <strong>{isDrawing ? "Ritläge aktivt" : "Ritläge av"}</strong>
+            <span>
+              {isDrawing
+                ? "Klicka ut hörn · dubbelklicka eller tryck Enter för att avsluta"
+                : "Välj Markera område för att börja"}
+            </span>
+          </div>
         </div>
 
         <button
