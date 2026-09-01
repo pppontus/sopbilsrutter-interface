@@ -137,6 +137,11 @@ export function MapCanvas({
       antialias: true,
     });
 
+    let mapHasLoaded = false;
+    const loadTimeout = window.setTimeout(() => {
+      if (!mapHasLoaded) setMapStatus("error");
+    }, 12000);
+
     const draw = new MapboxDraw({
       displayControlsDefault: false,
       defaultMode: "simple_select",
@@ -162,6 +167,8 @@ export function MapCanvas({
     map.on("draw.modechange", handleModeChange);
 
     map.on("load", () => {
+      mapHasLoaded = true;
+      window.clearTimeout(loadTimeout);
       tuneLightMapPalette(map);
 
       map.addSource("pickup-points", {
@@ -197,7 +204,13 @@ export function MapCanvas({
     });
 
     map.on("error", (event) => {
-      if (event?.error) setMapStatus("error");
+      if (mapHasLoaded || !event?.error) return;
+
+      const status = event.error.status ?? event.error.statusCode;
+      if (status === 401 || status === 403) {
+        window.clearTimeout(loadTimeout);
+        setMapStatus("error");
+      }
     });
 
     registerActions({
@@ -214,6 +227,7 @@ export function MapCanvas({
     });
 
     return () => {
+      window.clearTimeout(loadTimeout);
       registerActions(null);
       map.remove();
       mapRef.current = null;
