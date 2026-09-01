@@ -135,6 +135,11 @@ export function MapCanvas({
       maxBounds: MAP_VIEW.maxBounds,
       attributionControl: false,
       antialias: true,
+      transformRequest: (url) => ({
+        url,
+        // Preserve the repository path for the URL-restricted Pages token.
+        referrerPolicy: "no-referrer-when-downgrade",
+      }),
     });
 
     let mapHasLoaded = false;
