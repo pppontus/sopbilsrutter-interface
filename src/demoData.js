@@ -193,6 +193,14 @@ const ROUTE_STREETS = {
   ],
 };
 
+const ROUTE_ADDRESS_STREETS = {
+  "12": ["Hamngatan", "Ekholmsvägen", "Hässlegatan", "Tröskaregatan", "Järdalavägen"],
+  "18": ["Munkhagsgatan", "Skogslyckegatan", "Johannelundsvägen", "Tivedsvägen"],
+  "23": ["Vårbruksgatan", "Vistvägen", "Plöjaregatan", "Vimanshällsvägen"],
+  "31": ["Bergavägen", "Haningeleden", "Bäckagatan", "Grenadjärgatan"],
+  "44": ["Nya Tanneforsvägen", "Tegelbruksgatan", "Augustbergsgatan", "Kallerstadleden"],
+};
+
 function seededRandom(seed) {
   let value = seed >>> 0;
   return () => {
@@ -225,24 +233,35 @@ function makeRoutePoints({
   jitterAmount,
 }) {
   const random = seededRandom(seed);
-  return Array.from({ length: count }, (_, index) => ({
-    type: "Feature",
-    id: `${route.id}-${idOffset + index + 1}`,
-    properties: {
-      id: `${route.id}-${idOffset + index + 1}`,
-      routeId: route.id,
-      routeName: route.name,
-      area: route.area,
-      routeColor: route.color,
-      customerId:
-        customerIds?.[index] ||
-        `KUND-${route.id}-${String(Math.floor(index * 0.82) + 1).padStart(3, "0")}`,
-    },
-    geometry: {
-      type: "Point",
-      coordinates: pointAlongStreet(streets, index, random, jitterAmount),
-    },
-  }));
+  const addressStreets = ROUTE_ADDRESS_STREETS[route.id];
+
+  return Array.from({ length: count }, (_, index) => {
+    const sequence = idOffset + index + 1;
+    const pointId = `${route.id}-${sequence}`;
+    const street = addressStreets[(sequence - 1) % addressStreets.length];
+    const houseNumber = pointId === "12-1" ? 14 : 2 + ((sequence * 4 + Number(route.id)) % 68);
+
+    return {
+      type: "Feature",
+      id: pointId,
+      properties: {
+        id: pointId,
+        propertyId: pointId,
+        address: `${street} ${houseNumber}`,
+        routeId: route.id,
+        routeName: route.name,
+        area: route.area,
+        routeColor: route.color,
+        customerId:
+          customerIds?.[index] ||
+          `KUND-${route.id}-${String(Math.floor(index * 0.82) + 1).padStart(3, "0")}`,
+      },
+      geometry: {
+        type: "Point",
+        coordinates: pointAlongStreet(streets, index, random, jitterAmount),
+      },
+    };
+  });
 }
 
 const insideCustomerIds = Array.from({ length: 47 }, (_, index) =>

@@ -45,7 +45,12 @@ const DRAW_STYLES = [
   {
     id: "draw-midpoint",
     type: "circle",
-    filter: ["all", ["==", "meta", "midpoint"], ["==", "$type", "Point"]],
+    filter: [
+      "all",
+      ["==", "meta", "midpoint"],
+      ["==", "$type", "Point"],
+      ["==", "active", "true"],
+    ],
     paint: {
       "circle-radius": 4,
       "circle-color": "#ffffff",
@@ -56,7 +61,12 @@ const DRAW_STYLES = [
   {
     id: "draw-vertex-halo",
     type: "circle",
-    filter: ["all", ["==", "meta", "vertex"], ["==", "$type", "Point"]],
+    filter: [
+      "all",
+      ["==", "meta", "vertex"],
+      ["==", "$type", "Point"],
+      ["==", "active", "true"],
+    ],
     paint: {
       "circle-radius": 6,
       "circle-color": "#ffffff",
@@ -67,7 +77,12 @@ const DRAW_STYLES = [
   {
     id: "draw-vertex",
     type: "circle",
-    filter: ["all", ["==", "meta", "vertex"], ["==", "$type", "Point"]],
+    filter: [
+      "all",
+      ["==", "meta", "vertex"],
+      ["==", "$type", "Point"],
+      ["==", "active", "true"],
+    ],
     paint: {
       "circle-radius": 2.4,
       "circle-color": "#ffffff",
@@ -108,6 +123,8 @@ function tuneLightMapPalette(map) {
 export function MapCanvas({
   accessToken,
   points,
+  interactionMode,
+  onPointToggle,
   onPolygonsChange,
   onDrawingChange,
   registerActions,
@@ -115,11 +132,15 @@ export function MapCanvas({
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const drawRef = useRef(null);
+  const popupRef = useRef(null);
+  const hoveredPointIdRef = useRef(null);
   const pointsRef = useRef(points);
+  const interactionRef = useRef({ interactionMode, onPointToggle });
   const callbacksRef = useRef({ onPolygonsChange, onDrawingChange });
   const [mapStatus, setMapStatus] = useState(accessToken ? "loading" : "missing-token");
 
   pointsRef.current = points;
+  interactionRef.current = { interactionMode, onPointToggle };
   callbacksRef.current = { onPolygonsChange, onDrawingChange };
 
   useEffect(() => {
@@ -162,6 +183,88 @@ export function MapCanvas({
       callbacksRef.current.onPolygonsChange(getPolygons(draw));
     };
 
+    const clearHoveredPoint = () => {
+      if (hoveredPointIdRef.current !== null) {
+        map.removeFeatureState(
+          { source: "pickup-points", id: hoveredPointIdRef.current },
+          "hover",
+        );
+        hoveredPointIdRef.current = null;
+      }
+      popupRef.current?.remove();
+      map.getCanvas().style.cursor = "";
+    };
+
+    const setHoveredPoint = (pointId) => {
+      if (hoveredPointIdRef.current === pointId) return;
+
+      if (hoveredPointIdRef.current !== null) {
+        map.removeFeatureState(
+          { source: "pickup-points", id: hoveredPointIdRef.current },
+          "hover",
+        );
+      }
+
+      hoveredPointIdRef.current = pointId;
+      map.setFeatureState({ source: "pickup-points", id: pointId }, { hover: true });
+    };
+
+    const isFeatureSelected = (feature) =>
+      feature.properties?.selected === true || feature.properties?.selected === "true";
+
+    const showPointPopup = (feature, selected = isFeatureSelected(feature)) => {
+      const content = document.createElement("div");
+      const address = document.createElement("strong");
+      const detail = document.createElement("span");
+      const adjusting = interactionRef.current.interactionMode === "adjusting";
+
+      address.textContent = feature.properties?.address || "Adress saknas";
+      detail.textContent = adjusting
+        ? selected
+          ? "Berörd · Klicka för att ta bort"
+          : "Inte berörd · Klicka för att lägga till"
+        : `${feature.properties?.routeName} · ${feature.properties?.area}`;
+      content.append(address, detail);
+
+      popupRef.current ||= new mapboxgl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+        className: "pickup-point-popup",
+        offset: 14,
+      });
+      popupRef.current
+        .setLngLat(feature.geometry.coordinates)
+        .setDOMContent(content)
+        .addTo(map);
+    };
+
+    const handlePointMove = (event) => {
+      if (interactionRef.current.interactionMode === "drawing") {
+        clearHoveredPoint();
+        return;
+      }
+
+      const feature = event.features?.[0];
+      if (!feature) return;
+
+      setHoveredPoint(feature.id);
+      map.getCanvas().style.cursor =
+        interactionRef.current.interactionMode === "adjusting" ? "pointer" : "";
+      showPointPopup(feature);
+    };
+
+    const handlePointClick = (event) => {
+      if (interactionRef.current.interactionMode !== "adjusting") return;
+
+      const feature = event.features?.[0];
+      const pointId = feature?.properties?.id;
+      if (!feature || !pointId) return;
+
+      const nextSelected = !isFeatureSelected(feature);
+      interactionRef.current.onPointToggle(pointId);
+      showPointPopup(feature, nextSelected);
+    };
+
     const handleModeChange = (event) => {
       callbacksRef.current.onDrawingChange(event.mode === "draw_polygon");
     };
@@ -183,6 +286,30 @@ export function MapCanvas({
       });
 
       map.addLayer({
+        id: "pickup-point-hover",
+        type: "circle",
+        source: "pickup-points",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 11, 14, 15, 17, 18],
+          "circle-color": "#fff4e5",
+          "circle-opacity": [
+            "case",
+            ["boolean", ["feature-state", "hover"], false],
+            0.88,
+            0,
+          ],
+          "circle-stroke-color": "#d87916",
+          "circle-stroke-width": [
+            "case",
+            ["boolean", ["feature-state", "hover"], false],
+            1.5,
+            0,
+          ],
+          "circle-stroke-opacity": 0.7,
+        },
+      });
+
+      map.addLayer({
         id: "pickup-points",
         type: "circle",
         source: "pickup-points",
@@ -190,16 +317,43 @@ export function MapCanvas({
           "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 3.8, 14, 5.8, 17, 7.4],
           "circle-color": [
             "case",
+            ["==", ["get", "manualAdjustment"], "excluded"],
+            "#ffffff",
             ["boolean", ["get", "selected"], false],
             "#ef6b5a",
             ["get", "routeColor"],
           ],
           "circle-opacity": 0.9,
-          "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": 1.4,
+          "circle-stroke-color": [
+            "case",
+            ["==", ["get", "manualAdjustment"], "excluded"],
+            "#ef6b5a",
+            "#ffffff",
+          ],
+          "circle-stroke-width": [
+            "case",
+            ["==", ["get", "manualAdjustment"], "excluded"],
+            2.4,
+            1.4,
+          ],
           "circle-stroke-opacity": 0.95,
         },
       });
+
+      map.addLayer({
+        id: "pickup-point-hit",
+        type: "circle",
+        source: "pickup-points",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 12, 14, 17, 17, 22],
+          "circle-color": "#ffffff",
+          "circle-opacity": 0.01,
+        },
+      });
+
+      map.on("mousemove", "pickup-point-hit", handlePointMove);
+      map.on("mouseleave", "pickup-point-hit", clearHoveredPoint);
+      map.on("click", "pickup-point-hit", handlePointClick);
 
       const [demoPolygonId] = draw.add(DEMO_POLYGON);
       if (demoPolygonId) {
@@ -224,7 +378,7 @@ export function MapCanvas({
         callbacksRef.current.onDrawingChange(true);
       },
       stopDrawing() {
-        draw.changeMode("simple_select");
+        draw.changeMode("simple_select", { featureIds: [] });
         callbacksRef.current.onDrawingChange(false);
       },
       clearPolygons() {
@@ -237,6 +391,8 @@ export function MapCanvas({
 
     return () => {
       window.clearTimeout(loadTimeout);
+      popupRef.current?.remove();
+      popupRef.current = null;
       registerActions(null);
       map.remove();
       mapRef.current = null;
@@ -248,6 +404,20 @@ export function MapCanvas({
     const source = mapRef.current?.getSource("pickup-points");
     if (source) source.setData(points);
   }, [points]);
+
+  useEffect(() => {
+    if (interactionMode !== "drawing") return;
+
+    const map = mapRef.current;
+    if (map && hoveredPointIdRef.current !== null) {
+      map.removeFeatureState(
+        { source: "pickup-points", id: hoveredPointIdRef.current },
+        "hover",
+      );
+      hoveredPointIdRef.current = null;
+    }
+    popupRef.current?.remove();
+  }, [interactionMode]);
 
   return (
     <div className="map-canvas" aria-label="Karta över valda körlistor">

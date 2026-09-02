@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CursorClick,
   Eraser,
   List,
   MagnifyingGlass,
@@ -15,7 +16,9 @@ import {
   ROUTE_LISTS,
 } from "./demoData.js";
 import {
+  applyManualSelectionOverrides,
   asPointFeatureCollection,
+  countActiveManualOverrides,
   findAffectedPoints,
   summarizeAffectedPoints,
 } from "./selection.js";
@@ -102,6 +105,9 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [polygons, setPolygons] = useState([DEMO_POLYGON]);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [isAdjusting, setIsAdjusting] = useState(false);
+  const [manualActions, setManualActions] = useState([]);
+  const [adjustmentAnnouncement, setAdjustmentAnnouncement] = useState("");
   const [reasonId, setReasonId] = useState(DEFAULT_REASON.id);
   const [message, setMessage] = useState(DEFAULT_REASON.message);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -122,9 +128,30 @@ export function App() {
     [selectedRouteIds],
   );
 
-  const affectedPoints = useMemo(
+  const baseAffectedPoints = useMemo(
     () => findAffectedPoints(visiblePoints, polygons),
     [visiblePoints, polygons],
+  );
+
+  const baseAffectedIds = useMemo(
+    () => new Set(baseAffectedPoints.map((point) => point.properties.id)),
+    [baseAffectedPoints],
+  );
+
+  const manualOverrides = useMemo(() => {
+    const overrides = new Map();
+
+    manualActions.forEach(({ pointId, selected }) => {
+      if (selected === baseAffectedIds.has(pointId)) overrides.delete(pointId);
+      else overrides.set(pointId, selected);
+    });
+
+    return overrides;
+  }, [baseAffectedIds, manualActions]);
+
+  const affectedPoints = useMemo(
+    () => applyManualSelectionOverrides(visiblePoints, baseAffectedIds, manualOverrides),
+    [baseAffectedIds, manualOverrides, visiblePoints],
   );
 
   const affectedSummary = useMemo(
@@ -132,14 +159,14 @@ export function App() {
     [affectedPoints],
   );
 
-  const affectedIds = useMemo(
-    () => new Set(affectedPoints.map((point) => point.properties.id)),
-    [affectedPoints],
+  const manualAdjustmentCount = useMemo(
+    () => countActiveManualOverrides(visiblePoints, baseAffectedIds, manualOverrides),
+    [baseAffectedIds, manualOverrides, visiblePoints],
   );
 
   const pointCollection = useMemo(
-    () => asPointFeatureCollection(visiblePoints, affectedIds),
-    [visiblePoints, affectedIds],
+    () => asPointFeatureCollection(visiblePoints, baseAffectedIds, manualOverrides),
+    [baseAffectedIds, manualOverrides, visiblePoints],
   );
 
   const filteredRoutes = useMemo(() => {
@@ -154,12 +181,21 @@ export function App() {
     OUTAGE_REASONS.find((reason) => reason.id === reasonId) || DEFAULT_REASON;
 
   const toggleRoute = (routeId) => {
+    const routePointIds = new Set(
+      PICKUP_POINTS.filter((point) => point.properties.routeId === routeId).map(
+        (point) => point.properties.id,
+      ),
+    );
+
     setSelectedRouteIds((current) => {
       const next = new Set(current);
       if (next.has(routeId)) next.delete(routeId);
       else next.add(routeId);
       return next;
     });
+    setManualActions((current) =>
+      current.filter((action) => !routePointIds.has(action.pointId)),
+    );
   };
 
   const handleReasonChange = (event) => {
@@ -171,12 +207,51 @@ export function App() {
 
   const toggleDrawing = () => {
     if (isDrawing) mapActionsRef.current?.stopDrawing();
-    else mapActionsRef.current?.startDrawing();
+    else {
+      setIsAdjusting(false);
+      mapActionsRef.current?.startDrawing();
+    }
+  };
+
+  const toggleAdjusting = () => {
+    if (isAdjusting) {
+      setIsAdjusting(false);
+      return;
+    }
+
+    mapActionsRef.current?.stopDrawing();
+    setIsAdjusting(true);
+  };
+
+  const togglePoint = useCallback(
+    (pointId) => {
+      const point = visiblePoints.find((candidate) => candidate.properties.id === pointId);
+      if (!point) return;
+
+      const selected = manualOverrides.has(pointId)
+        ? manualOverrides.get(pointId)
+        : baseAffectedIds.has(pointId);
+      const nextSelected = !selected;
+
+      setManualActions((current) => [...current, { pointId, selected: nextSelected }]);
+      setAdjustmentAnnouncement(
+        `${point.properties.address} ${nextSelected ? "lades till i" : "togs bort från"} markeringen.`,
+      );
+    },
+    [baseAffectedIds, manualOverrides, visiblePoints],
+  );
+
+  const undoLastManualAction = () => {
+    if (manualActions.length === 0) return;
+    setManualActions((current) => current.slice(0, -1));
+    setAdjustmentAnnouncement("Senaste manuella justeringen ångrades.");
   };
 
   const clearSelection = () => {
     mapActionsRef.current?.clearPolygons();
     if (!mapActionsRef.current) setPolygons([]);
+    setManualActions([]);
+    setAdjustmentAnnouncement("Alla markeringar rensades.");
   };
 
   const routeCountLabel = `${affectedSummary.routeIds.length} ${
@@ -245,21 +320,23 @@ export function App() {
       )}
 
       <section
-        className={`map-workspace ${isDrawing ? "is-drawing" : ""}`}
+        className={`map-workspace ${isDrawing ? "is-drawing" : ""} ${isAdjusting ? "is-adjusting" : ""}`}
         aria-label="Arbetsyta för områdesmarkering"
       >
         <MapCanvas
           accessToken={import.meta.env.VITE_MAPBOX_ACCESS_TOKEN}
           points={pointCollection}
+          interactionMode={isDrawing ? "drawing" : isAdjusting ? "adjusting" : "idle"}
+          onPointToggle={togglePoint}
           onPolygonsChange={setPolygons}
           onDrawingChange={setIsDrawing}
           registerActions={registerMapActions}
         />
 
-        <div className={`map-toolbar ${isDrawing ? "is-drawing" : ""}`}>
+        <div className={`map-toolbar ${isDrawing || isAdjusting ? "has-active-mode" : ""}`}>
           <div className="map-toolbar-actions" aria-label="Kartverktyg">
             <button
-              className={`map-tool map-tool--primary ${isDrawing ? "is-active" : ""}`}
+              className={`map-tool map-tool--draw ${!isAdjusting ? "map-tool--primary" : ""} ${isDrawing ? "is-active" : ""}`}
               type="button"
               aria-pressed={isDrawing}
               onClick={toggleDrawing}
@@ -268,9 +345,19 @@ export function App() {
               {isDrawing ? "Avsluta ritläge" : "Markera område"}
             </button>
             <button
+              className={`map-tool map-tool--adjust ${isAdjusting ? "is-active" : ""}`}
+              type="button"
+              aria-pressed={isAdjusting}
+              disabled={visiblePoints.length === 0}
+              onClick={toggleAdjusting}
+            >
+              <CursorClick size={22} weight={isAdjusting ? "fill" : "regular"} aria-hidden="true" />
+              {isAdjusting ? "Avsluta justering" : "Justera fastigheter"}
+            </button>
+            <button
               className="map-tool"
               type="button"
-              disabled={polygons.length === 0}
+              disabled={polygons.length === 0 && manualAdjustmentCount === 0}
               onClick={clearSelection}
             >
               <Eraser size={22} weight="regular" aria-hidden="true" />
@@ -278,16 +365,28 @@ export function App() {
             </button>
           </div>
 
-          <div className={`drawing-status ${isDrawing ? "is-active" : ""}`} role="status" aria-live="polite">
+          <div
+            className={`drawing-status ${isDrawing || isAdjusting ? "is-active" : ""}`}
+            role="status"
+            aria-live="polite"
+          >
             <span className="drawing-status-dot" aria-hidden="true" />
-            <strong>{isDrawing ? "Ritläge aktivt" : "Ritläge av"}</strong>
+            <strong>
+              {isDrawing ? "Ritläge aktivt" : isAdjusting ? "Justering aktiv" : "Ritläge av"}
+            </strong>
             <span>
               {isDrawing
                 ? "Klicka ut hörn · dubbelklicka eller tryck Enter för att avsluta"
-                : "Välj Markera område för att börja"}
+                : isAdjusting
+                  ? "Klicka på en fastighet för att lägga till eller ta bort"
+                  : "Hovra över en punkt för att se adressen"}
             </span>
           </div>
         </div>
+
+        <p className="sr-only" role="status" aria-live="polite">
+          {adjustmentAnnouncement}
+        </p>
 
         <button
           className="routes-toggle"
@@ -309,8 +408,20 @@ export function App() {
             <p>
               {affectedSummary.pickupCount > 0
                 ? `${affectedSummary.customerCount} kunder på ${routeCountLabel}`
-                : "Rita ett område för att markera hämtställen"}
+                : "Rita ett område eller lägg till enskilda fastigheter"}
             </p>
+            {manualAdjustmentCount > 0 && (
+              <div className="manual-adjustment-summary">
+                <span>
+                  {manualAdjustmentCount} {manualAdjustmentCount === 1
+                    ? "manuell justering"
+                    : "manuella justeringar"}
+                </span>
+                <button type="button" onClick={undoLastManualAction}>
+                  Ångra
+                </button>
+              </div>
+            )}
           </div>
 
           <label className="field">
