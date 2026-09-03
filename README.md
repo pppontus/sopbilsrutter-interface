@@ -1,6 +1,6 @@
 # Avbrott på körlistor
 
-En lokal, helt syntetisk prototyp för att markera vilka hämtställen som berörs av ett avbrott och förhandsgranska ett kundmeddelande.
+En lokal prototyp för att välja körlistor och ange om hela eller delar av dem berörs av en störning. Kartan använder koordinater från `waste_routes_for_2026-05-07.json`; filen innehåller inga adresser eller kunduppgifter. Inget meddelande skickas från prototypen.
 
 ## Publicerad prototyp
 
@@ -13,7 +13,7 @@ Kartan använder Mapbox Light. Skapa `.env.local` från `.env.example` och lägg
 ## Kontroller
 
 - `npm run dev` startar den lokala prototypen.
-- `npm test` verifierar demodata, polygonurval och sammanräkning.
+- `npm test` verifierar importerad körlistedata, tvåstegsflöde, polygonurval och sammanräkning.
 - `npm run build` skapar det statiska bygget.
 - `npm run test:sites` verifierar det medföljande hostingbygget.
 

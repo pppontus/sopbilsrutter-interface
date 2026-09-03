@@ -1,473 +1,366 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
-  CursorClick,
+  ArrowLeft,
+  Check,
   Eraser,
-  List,
   MagnifyingGlass,
+  MapTrifold,
   Polygon,
+  Rows,
   X,
 } from "@phosphor-icons/react";
 import { MapCanvas } from "./MapCanvas.jsx";
+import { COLLECTION_DATE, PICKUP_POINTS, ROUTE_LISTS, getPointBounds } from "./routeData.js";
+import { initialFlow, flowReducer } from "./flow.js";
 import {
-  DEFAULT_SELECTED_ROUTE_IDS,
-  DEMO_POLYGON,
-  OUTAGE_REASONS,
-  PICKUP_POINTS,
-  ROUTE_LISTS,
-} from "./demoData.js";
-import {
-  applyManualSelectionOverrides,
   asPointFeatureCollection,
-  countActiveManualOverrides,
   findAffectedPoints,
   summarizeAffectedPoints,
 } from "./selection.js";
 
-const DEFAULT_REASON = OUTAGE_REASONS[0];
+const formatDate = (date) =>
+  new Intl.DateTimeFormat("sv-SE", { day: "numeric", month: "long", year: "numeric" })
+    .format(new Date(`${date}T12:00:00`));
 
-function PreviewDialog({ affectedSummary, reason, message, selectedRoutes, onClose }) {
-  const closeButtonRef = useRef(null);
+function PrototypeDialog({ scope, selectedRoutes, pointCount, onClose }) {
+  const dialogRef = useRef(null);
 
   useEffect(() => {
-    closeButtonRef.current?.focus();
-    const closeOnEscape = (event) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+
+  const routeLabel = selectedRoutes.length === 1 ? "hela körlistan" : "hela körlistorna";
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="preview-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="preview-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+    <dialog
+      ref={dialogRef}
+      className="prototype-dialog"
+      aria-labelledby="prototype-title"
+      onCancel={onClose}
+      onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section className="dialog-card">
         <div className="dialog-header">
-          <div>
-            <span className="eyebrow">Förhandsgranskning</span>
-            <h2 id="preview-title">Meddelande till berörda kunder</h2>
-          </div>
-          <button
-            ref={closeButtonRef}
-            className="icon-button"
-            type="button"
-            aria-label="Stäng förhandsgranskningen"
-            onClick={onClose}
-          >
-            <X size={21} weight="bold" aria-hidden="true" />
+          <span className="dialog-icon" aria-hidden="true">
+            <Check size={24} weight="bold" />
+          </span>
+          <button className="icon-button" type="button" aria-label="Stäng" onClick={onClose}>
+            <X size={20} weight="bold" aria-hidden="true" />
           </button>
         </div>
-
+        <span className="eyebrow">Nästa steg</span>
+        <h2 id="prototype-title">Utskicket kommer i den färdiga tjänsten</h2>
+        <p>
+          I den här prototypen kan du välja mottagare, men inget meddelande skickas.
+          Den färdiga tjänsten tar dig vidare till granskning och utskick.
+        </p>
         <dl className="preview-summary">
           <div>
-            <dt>Mottagare</dt>
-            <dd>{affectedSummary.customerCount} kunder</dd>
-          </div>
-          <div>
-            <dt>Hämtställen</dt>
-            <dd>{affectedSummary.pickupCount}</dd>
+            <dt>Omfattning</dt>
+            <dd>{scope === "all" ? routeLabel : "Markerat område"}</dd>
           </div>
           <div>
             <dt>Körlistor</dt>
-            <dd>{selectedRoutes.map((route) => route.name.replace("Körlista ", "")).join(", ")}</dd>
+            <dd>{selectedRoutes.map((route) => route.name).join(", ")}</dd>
           </div>
           <div>
-            <dt>Orsak</dt>
-            <dd>{reason.label}</dd>
+            <dt>Koordinatposter</dt>
+            <dd>{pointCount.toLocaleString("sv-SE")}</dd>
           </div>
         </dl>
-
-        <div className="message-preview">
-          <span>Meddelande</span>
-          <p>{message}</p>
-        </div>
-
-        <div className="prototype-notice">
-          Detta är en prototyp. Inget meddelande skickas.
-        </div>
-
         <button className="primary-button dialog-close" type="button" onClick={onClose}>
-          Stäng
+          Tillbaka till prototypen
         </button>
       </section>
-    </div>
+    </dialog>
   );
 }
 
-export function App() {
-  const [selectedRouteIds, setSelectedRouteIds] = useState(
-    () => new Set(DEFAULT_SELECTED_ROUTE_IDS),
-  );
+function RouteStep({ selectedRouteIds, dispatch }) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [polygons, setPolygons] = useState([DEMO_POLYGON]);
+  const selectedSet = useMemo(() => new Set(selectedRouteIds), [selectedRouteIds]);
+  const filteredRoutes = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase("sv");
+    return query
+      ? ROUTE_LISTS.filter((route) => route.name.toLocaleLowerCase("sv").includes(query))
+      : ROUTE_LISTS;
+  }, [searchQuery]);
+  const selectedRoutes = ROUTE_LISTS.filter((route) => selectedSet.has(route.id));
+  const totalPoints = selectedRoutes.reduce((sum, route) => sum + route.pointCount, 0);
+  const visibleIds = filteredRoutes.map((route) => route.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedSet.has(id));
+
+  const updateVisibleSelection = () => {
+    const ids = new Set(selectedRouteIds);
+    visibleIds.forEach((id) => allVisibleSelected ? ids.delete(id) : ids.add(id));
+    dispatch({ type: "select-routes", ids: [...ids] });
+  };
+
+  return (
+    <main className="route-step">
+      <header className="flow-header">
+        <div>
+          <span className="eyebrow">Störning i sophämtningen</span>
+          <h1>Vilka körlistor berörs?</h1>
+          <p>Välj en eller flera körlistor för {formatDate(COLLECTION_DATE)}.</p>
+        </div>
+        <ol className="step-indicator" aria-label="Steg">
+          <li className="is-current"><span>1</span> Välj körlistor</li>
+          <li><span>2</span> Markera område vid behov</li>
+        </ol>
+      </header>
+
+      <div className="route-layout">
+        <section className="route-picker" aria-labelledby="route-picker-title">
+          <div className="picker-toolbar">
+            <label className="route-search">
+              <MagnifyingGlass size={20} aria-hidden="true" />
+              <span className="sr-only">Sök körlista</span>
+              <input
+                type="search"
+                value={searchQuery}
+                placeholder="Sök körlista"
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+            </label>
+            <button className="text-button" type="button" onClick={updateVisibleSelection}>
+              {allVisibleSelected ? "Avmarkera visade" : "Markera alla visade"}
+            </button>
+          </div>
+          <h2 id="route-picker-title" className="sr-only">Tillgängliga körlistor</h2>
+          <div className="route-grid">
+            {filteredRoutes.map((route) => (
+              <label
+                className={`route-card ${selectedSet.has(route.id) ? "is-selected" : ""}`}
+                key={route.id}
+                style={{ "--route-color": route.color }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedSet.has(route.id)}
+                  onChange={() => dispatch({ type: "toggle-route", id: route.id })}
+                />
+                <span className="route-dot" aria-hidden="true" />
+                <span className="route-copy">
+                  <strong>{route.name}</strong>
+                  <span>{route.pointCount.toLocaleString("sv-SE")} koordinatposter</span>
+                </span>
+                <span className="check-mark" aria-hidden="true"><Check size={15} weight="bold" /></span>
+              </label>
+            ))}
+            {filteredRoutes.length === 0 && (
+              <p className="empty-routes">Ingen körlista matchar din sökning.</p>
+            )}
+          </div>
+        </section>
+
+        <aside className="scope-panel" aria-labelledby="scope-heading">
+          <span className="eyebrow">Vald omfattning</span>
+          <h2 id="scope-heading">
+            {selectedRoutes.length
+              ? `${selectedRoutes.length} ${selectedRoutes.length === 1 ? "körlista" : "körlistor"}`
+              : "Välj minst en körlista"}
+          </h2>
+          <p className="scope-summary">
+            {selectedRoutes.length
+              ? `${totalPoints.toLocaleString("sv-SE")} koordinatposter valda`
+              : "Därefter väljer du om hela eller delar av körlistan berörs."}
+          </p>
+
+          <div className="scope-actions">
+            <button
+              className="scope-action scope-action--primary"
+              type="button"
+              disabled={!selectedRoutes.length}
+              onClick={() => dispatch({ type: "preview-all" })}
+            >
+              <Rows size={24} weight="regular" aria-hidden="true" />
+              <span>
+                <strong>Meddela hela {selectedRoutes.length === 1 ? "körlistan" : "körlistorna"}</strong>
+                <small>Alla punkter i ditt val omfattas.</small>
+              </span>
+            </button>
+            <button
+              className="scope-action"
+              type="button"
+              disabled={!selectedRoutes.length}
+              onClick={() => dispatch({ type: "open-map" })}
+            >
+              <MapTrifold size={24} weight="regular" aria-hidden="true" />
+              <span>
+                <strong>Meddela delar av {selectedRoutes.length === 1 ? "körlistan" : "körlistorna"}</strong>
+                <small>Markera ett område på kartan.</small>
+              </span>
+            </button>
+          </div>
+          <p className="source-note">
+            Underlaget innehåller koordinater men inga adresser eller kunduppgifter.
+          </p>
+        </aside>
+      </div>
+    </main>
+  );
+}
+
+function MapStep({ state, dispatch }) {
   const [isDrawing, setIsDrawing] = useState(false);
-  const [isAdjusting, setIsAdjusting] = useState(false);
-  const [manualActions, setManualActions] = useState([]);
-  const [adjustmentAnnouncement, setAdjustmentAnnouncement] = useState("");
-  const [reasonId, setReasonId] = useState(DEFAULT_REASON.id);
-  const [message, setMessage] = useState(DEFAULT_REASON.message);
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const mapActionsRef = useRef(null);
-
-  const registerMapActions = useCallback((actions) => {
-    mapActionsRef.current = actions;
-  }, []);
-
-  const selectedRoutes = useMemo(
-    () => ROUTE_LISTS.filter((route) => selectedRouteIds.has(route.id)),
-    [selectedRouteIds],
-  );
-
+  const selectedSet = useMemo(() => new Set(state.selectedRouteIds), [state.selectedRouteIds]);
+  const selectedRoutes = ROUTE_LISTS.filter((route) => selectedSet.has(route.id));
   const visiblePoints = useMemo(
-    () => PICKUP_POINTS.filter((point) => selectedRouteIds.has(point.properties.routeId)),
-    [selectedRouteIds],
+    () => PICKUP_POINTS.filter((point) => selectedSet.has(point.properties.routeId)),
+    [selectedSet],
   );
-
-  const baseAffectedPoints = useMemo(
-    () => findAffectedPoints(visiblePoints, polygons),
-    [visiblePoints, polygons],
-  );
-
-  const baseAffectedIds = useMemo(
-    () => new Set(baseAffectedPoints.map((point) => point.properties.id)),
-    [baseAffectedPoints],
-  );
-
-  const manualOverrides = useMemo(() => {
-    const overrides = new Map();
-
-    manualActions.forEach(({ pointId, selected }) => {
-      if (selected === baseAffectedIds.has(pointId)) overrides.delete(pointId);
-      else overrides.set(pointId, selected);
-    });
-
-    return overrides;
-  }, [baseAffectedIds, manualActions]);
-
   const affectedPoints = useMemo(
-    () => applyManualSelectionOverrides(visiblePoints, baseAffectedIds, manualOverrides),
-    [baseAffectedIds, manualOverrides, visiblePoints],
+    () => findAffectedPoints(visiblePoints, state.polygons),
+    [visiblePoints, state.polygons],
   );
-
   const affectedSummary = useMemo(
     () => summarizeAffectedPoints(affectedPoints),
     [affectedPoints],
   );
-
-  const manualAdjustmentCount = useMemo(
-    () => countActiveManualOverrides(visiblePoints, baseAffectedIds, manualOverrides),
-    [baseAffectedIds, manualOverrides, visiblePoints],
+  const affectedIds = useMemo(
+    () => new Set(affectedPoints.map((point) => point.properties.id)),
+    [affectedPoints],
   );
-
   const pointCollection = useMemo(
-    () => asPointFeatureCollection(visiblePoints, baseAffectedIds, manualOverrides),
-    [baseAffectedIds, manualOverrides, visiblePoints],
+    () => asPointFeatureCollection(visiblePoints, affectedIds),
+    [visiblePoints, affectedIds],
   );
-
-  const filteredRoutes = useMemo(() => {
-    const query = searchQuery.trim().toLocaleLowerCase("sv");
-    if (!query) return ROUTE_LISTS;
-    return ROUTE_LISTS.filter((route) =>
-      `${route.name} ${route.area}`.toLocaleLowerCase("sv").includes(query),
-    );
-  }, [searchQuery]);
-
-  const selectedReason =
-    OUTAGE_REASONS.find((reason) => reason.id === reasonId) || DEFAULT_REASON;
-
-  const toggleRoute = (routeId) => {
-    const routePointIds = new Set(
-      PICKUP_POINTS.filter((point) => point.properties.routeId === routeId).map(
-        (point) => point.properties.id,
-      ),
-    );
-
-    setSelectedRouteIds((current) => {
-      const next = new Set(current);
-      if (next.has(routeId)) next.delete(routeId);
-      else next.add(routeId);
-      return next;
-    });
-    setManualActions((current) =>
-      current.filter((action) => !routePointIds.has(action.pointId)),
-    );
-  };
-
-  const handleReasonChange = (event) => {
-    const nextReason = OUTAGE_REASONS.find((reason) => reason.id === event.target.value);
-    if (!nextReason) return;
-    setReasonId(nextReason.id);
-    setMessage(nextReason.message);
-  };
-
-  const toggleDrawing = () => {
-    if (isDrawing) mapActionsRef.current?.stopDrawing();
-    else {
-      setIsAdjusting(false);
-      mapActionsRef.current?.startDrawing();
-    }
-  };
-
-  const toggleAdjusting = () => {
-    if (isAdjusting) {
-      setIsAdjusting(false);
-      return;
-    }
-
+  const bounds = useMemo(() => getPointBounds(visiblePoints), [visiblePoints]);
+  const registerMapActions = useCallback((actions) => {
+    mapActionsRef.current = actions;
+  }, []);
+  const handleBack = () => {
     mapActionsRef.current?.stopDrawing();
-    setIsAdjusting(true);
+    dispatch({ type: "back" });
   };
-
-  const togglePoint = useCallback(
-    (pointId) => {
-      const point = visiblePoints.find((candidate) => candidate.properties.id === pointId);
-      if (!point) return;
-
-      const selected = manualOverrides.has(pointId)
-        ? manualOverrides.get(pointId)
-        : baseAffectedIds.has(pointId);
-      const nextSelected = !selected;
-
-      setManualActions((current) => [...current, { pointId, selected: nextSelected }]);
-      setAdjustmentAnnouncement(
-        `${point.properties.address} ${nextSelected ? "lades till i" : "togs bort från"} markeringen.`,
-      );
-    },
-    [baseAffectedIds, manualOverrides, visiblePoints],
-  );
-
-  const undoLastManualAction = () => {
-    if (manualActions.length === 0) return;
-    setManualActions((current) => current.slice(0, -1));
-    setAdjustmentAnnouncement("Senaste manuella justeringen ångrades.");
-  };
-
   const clearSelection = () => {
     mapActionsRef.current?.clearPolygons();
-    if (!mapActionsRef.current) setPolygons([]);
-    setManualActions([]);
-    setAdjustmentAnnouncement("Alla markeringar rensades.");
+    dispatch({ type: "set-polygons", polygons: [] });
   };
-
-  const routeCountLabel = `${affectedSummary.routeIds.length} ${
-    affectedSummary.routeIds.length === 1 ? "körlista" : "körlistor"
-  }`;
 
   return (
     <main className="app-shell">
-      <aside className={`route-sidebar ${isSidebarOpen ? "route-sidebar--open" : ""}`}>
-        <div className="sidebar-heading">
-          <h1>Körlistor</h1>
-          <button
-            className="icon-button sidebar-close"
-            type="button"
-            aria-label="Stäng körlistor"
-            onClick={() => setIsSidebarOpen(false)}
-          >
-            <X size={20} weight="bold" aria-hidden="true" />
-          </button>
-        </div>
-
-        <label className="route-search">
-          <MagnifyingGlass size={20} weight="regular" aria-hidden="true" />
-          <span className="sr-only">Sök körlista</span>
-          <input
-            type="search"
-            value={searchQuery}
-            placeholder="Sök körlista"
-            onChange={(event) => setSearchQuery(event.target.value)}
-          />
-        </label>
-
-        <div className="route-list" aria-label="Tillgängliga körlistor">
-          {filteredRoutes.map((route) => (
-            <label
-              className="route-row"
-              key={route.id}
-              style={{ "--route-color": route.color }}
-            >
-              <input
-                type="checkbox"
-                checked={selectedRouteIds.has(route.id)}
-                onChange={() => toggleRoute(route.id)}
-              />
-              <span className="route-dot" aria-hidden="true" />
-              <span className="route-copy">
-                <strong>{route.name} · {route.area}</strong>
-                <span>{route.binCount} kärl</span>
-              </span>
-            </label>
-          ))}
-
-          {filteredRoutes.length === 0 && (
-            <p className="empty-routes">Ingen körlista matchar din sökning.</p>
-          )}
+      <aside className="selected-sidebar">
+        <button className="back-button" type="button" onClick={handleBack}>
+          <ArrowLeft size={19} weight="bold" aria-hidden="true" />
+          Ändra körlistor
+        </button>
+        <span className="eyebrow">Steg 2 av 2</span>
+        <h1>Markera berört område</h1>
+        <p className="sidebar-intro">
+          Körlistorna är valda. Rita området där sopbilen inte kan hämta.
+        </p>
+        <div className="locked-routes">
+          <div className="locked-heading">
+            <h2>{selectedRoutes.length} valda {selectedRoutes.length === 1 ? "körlista" : "körlistor"}</h2>
+            <span>Låsta i detta steg</span>
+          </div>
+          <ul>
+            {selectedRoutes.map((route) => (
+              <li key={route.id}>
+                <span className="route-dot" style={{ "--route-color": route.color }} aria-hidden="true" />
+                <span><strong>{route.name}</strong>{route.pointCount.toLocaleString("sv-SE")} koordinatposter</span>
+              </li>
+            ))}
+          </ul>
         </div>
       </aside>
 
-      {isSidebarOpen && (
-        <button
-          className="sidebar-scrim"
-          type="button"
-          aria-label="Stäng körlistor"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-      )}
-
-      <section
-        className={`map-workspace ${isDrawing ? "is-drawing" : ""} ${isAdjusting ? "is-adjusting" : ""}`}
-        aria-label="Arbetsyta för områdesmarkering"
-      >
+      <section className={`map-workspace ${isDrawing ? "is-drawing" : ""}`} aria-label="Arbetsyta för områdesmarkering">
         <MapCanvas
           accessToken={import.meta.env.VITE_MAPBOX_ACCESS_TOKEN}
           points={pointCollection}
-          interactionMode={isDrawing ? "drawing" : isAdjusting ? "adjusting" : "idle"}
-          onPointToggle={togglePoint}
-          onPolygonsChange={setPolygons}
+          bounds={bounds}
+          interactionMode={isDrawing ? "drawing" : "idle"}
+          onPolygonsChange={(polygons) => dispatch({ type: "set-polygons", polygons })}
           onDrawingChange={setIsDrawing}
           registerActions={registerMapActions}
         />
-
-        <div className={`map-toolbar ${isDrawing || isAdjusting ? "has-active-mode" : ""}`}>
+        <div className="map-toolbar">
           <div className="map-toolbar-actions" aria-label="Kartverktyg">
             <button
-              className={`map-tool map-tool--draw ${!isAdjusting ? "map-tool--primary" : ""} ${isDrawing ? "is-active" : ""}`}
+              className={`map-tool map-tool--primary ${isDrawing ? "is-active" : ""}`}
               type="button"
               aria-pressed={isDrawing}
-              onClick={toggleDrawing}
+              onClick={() => isDrawing
+                ? mapActionsRef.current?.stopDrawing()
+                : mapActionsRef.current?.startDrawing()}
             >
               <Polygon size={22} weight={isDrawing ? "fill" : "regular"} aria-hidden="true" />
               {isDrawing ? "Avsluta ritläge" : "Markera område"}
             </button>
             <button
-              className={`map-tool map-tool--adjust ${isAdjusting ? "is-active" : ""}`}
-              type="button"
-              aria-pressed={isAdjusting}
-              disabled={visiblePoints.length === 0}
-              onClick={toggleAdjusting}
-            >
-              <CursorClick size={22} weight={isAdjusting ? "fill" : "regular"} aria-hidden="true" />
-              {isAdjusting ? "Avsluta justering" : "Justera fastigheter"}
-            </button>
-            <button
               className="map-tool"
               type="button"
-              disabled={polygons.length === 0 && manualAdjustmentCount === 0}
+              disabled={!state.polygons.length}
               onClick={clearSelection}
             >
-              <Eraser size={22} weight="regular" aria-hidden="true" />
+              <Eraser size={22} aria-hidden="true" />
               Rensa markering
             </button>
           </div>
-
-          <div
-            className={`drawing-status ${isDrawing || isAdjusting ? "is-active" : ""}`}
-            role="status"
-            aria-live="polite"
-          >
+          <div className={`drawing-status ${isDrawing ? "is-active" : ""}`} role="status">
             <span className="drawing-status-dot" aria-hidden="true" />
-            <strong>
-              {isDrawing ? "Ritläge aktivt" : isAdjusting ? "Justering aktiv" : "Ritläge av"}
-            </strong>
-            <span>
-              {isDrawing
-                ? "Klicka ut hörn · dubbelklicka eller tryck Enter för att avsluta"
-                : isAdjusting
-                  ? "Klicka på en fastighet för att lägga till eller ta bort"
-                  : "Hovra över en punkt för att se adressen"}
-            </span>
+            <strong>{isDrawing ? "Ritläge aktivt" : "Ritläge av"}</strong>
+            <span>{isDrawing ? "Klicka ut hörn · dubbelklicka för att avsluta" : "Starta ritläget för att markera ett område"}</span>
           </div>
         </div>
-
-        <p className="sr-only" role="status" aria-live="polite">
-          {adjustmentAnnouncement}
-        </p>
-
-        <button
-          className="routes-toggle"
-          type="button"
-          aria-expanded={isSidebarOpen}
-          onClick={() => setIsSidebarOpen(true)}
-        >
-          <List size={20} weight="bold" aria-hidden="true" />
-          Körlistor
-        </button>
 
         <section className="action-panel" aria-labelledby="affected-heading">
           <div className="affected-heading">
             <h2 id="affected-heading">
-              {affectedSummary.pickupCount > 0
-                ? `${affectedSummary.pickupCount} hämtställen berörs`
-                : "Inga hämtställen berörs"}
+              {affectedSummary.pointCount
+                ? `${affectedSummary.pointCount.toLocaleString("sv-SE")} koordinatposter berörs`
+                : "Inga punkter markerade"}
             </h2>
             <p>
-              {affectedSummary.pickupCount > 0
-                ? `${affectedSummary.customerCount} kunder på ${routeCountLabel}`
-                : "Rita ett område eller lägg till enskilda fastigheter"}
+              {affectedSummary.pointCount
+                ? `På ${affectedSummary.routeIds.length} ${affectedSummary.routeIds.length === 1 ? "körlista" : "körlistor"}`
+                : "Rita ett område på kartan för att välja mottagare."}
             </p>
-            {manualAdjustmentCount > 0 && (
-              <div className="manual-adjustment-summary">
-                <span>
-                  {manualAdjustmentCount} {manualAdjustmentCount === 1
-                    ? "manuell justering"
-                    : "manuella justeringar"}
-                </span>
-                <button type="button" onClick={undoLastManualAction}>
-                  Ångra
-                </button>
-              </div>
-            )}
           </div>
-
-          <label className="field">
-            <span>Orsak</span>
-            <select value={reasonId} onChange={handleReasonChange}>
-              {OUTAGE_REASONS.map((reason) => (
-                <option key={reason.id} value={reason.id}>
-                  {reason.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="field">
-            <span>Meddelande till kunder</span>
-            <textarea
-              rows={4}
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-            />
-          </label>
-
           <button
             className="primary-button preview-button"
             type="button"
-            disabled={affectedSummary.pickupCount === 0 || !message.trim()}
-            onClick={() => setIsPreviewOpen(true)}
+            disabled={!affectedSummary.pointCount}
+            onClick={() => dispatch({ type: "preview-area", pointCount: affectedSummary.pointCount })}
           >
-            Förhandsgranska utskick
+            Meddela kunder
           </button>
-
-          <p className="prototype-caption">Detta är en prototyp – inget meddelande skickas.</p>
+          <p className="prototype-caption">Prototyp · Inget meddelande skickas.</p>
         </section>
       </section>
+    </main>
+  );
+}
 
-      {isPreviewOpen && (
-        <PreviewDialog
-          affectedSummary={affectedSummary}
-          reason={selectedReason}
-          message={message}
-          selectedRoutes={selectedRoutes.filter((route) =>
-            affectedSummary.routeIds.includes(route.id),
-          )}
-          onClose={() => setIsPreviewOpen(false)}
+export function App() {
+  const [state, dispatch] = useReducer(flowReducer, initialFlow);
+  const selectedSet = useMemo(() => new Set(state.selectedRouteIds), [state.selectedRouteIds]);
+  const selectedRoutes = ROUTE_LISTS.filter((route) => selectedSet.has(route.id));
+  const visiblePoints = PICKUP_POINTS.filter((point) => selectedSet.has(point.properties.routeId));
+  const affectedPoints = findAffectedPoints(visiblePoints, state.polygons);
+  const previewPointCount = state.previewScope === "all" ? visiblePoints.length : affectedPoints.length;
+
+  return (
+    <>
+      {state.step === "routes"
+        ? <RouteStep selectedRouteIds={state.selectedRouteIds} dispatch={dispatch} />
+        : <MapStep state={state} dispatch={dispatch} />}
+      {state.previewScope && (
+        <PrototypeDialog
+          scope={state.previewScope}
+          selectedRoutes={selectedRoutes}
+          pointCount={previewPointCount}
+          onClose={() => dispatch({ type: "close-preview" })}
         />
       )}
-    </main>
+    </>
   );
 }
