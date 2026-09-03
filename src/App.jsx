@@ -258,7 +258,9 @@ function MapStep({ state, dispatch }) {
         </p>
         <div className="locked-routes">
           <div className="locked-heading">
-            <h2>{selectedRoutes.length} valda {selectedRoutes.length === 1 ? "körlista" : "körlistor"}</h2>
+            <h2>
+              {selectedRoutes.length} {selectedRoutes.length === 1 ? "vald körlista" : "valda körlistor"}
+            </h2>
             <span>Låsta i detta steg</span>
           </div>
           <ul>
